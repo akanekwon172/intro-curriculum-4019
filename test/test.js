@@ -17,23 +17,23 @@ const setUp = () => {
 // テスト終了後
 const tearDown = () => {
   passportStub.logout();
-  passportStub.uninstall(app);
+  passportStub.uninstall();
 };
 
 describe('/login', () => {
   beforeAll(() => { setUp(); });
   afterAll(() => { tearDown(); });
 
-  test('ログインのためのリンクが含まれる', () => {
-    return request(app)
+  test('ログインのためのリンクが含まれる', async () => {
+    await request(app)
       .get('/login')
       .expect('Content-Type', 'text/html; charset=utf-8')
       .expect(/<a href="\/auth\/github"/)
       .expect(200);
   });
 
-  test('ログイン時はユーザー名が表示される', () => {
-    return request(app)
+  test('ログイン時はユーザー名が表示される', async () => {
+    await request(app)
       .get('/login')
       .expect(/testuser/)
       .expect(200);
@@ -41,8 +41,8 @@ describe('/login', () => {
 });
 
 describe('/logout', () => {
-  test('/ にリダイレクトされる', () => {
-    return request(app)
+  test('/ にリダイレクトされる', async () => {
+    await request(app)
       .get('/logout')
       .expect('Location', '/')
       .expect(302);
@@ -50,92 +50,85 @@ describe('/logout', () => {
 });
 
 describe('/schedules', () => {
+  let scheduleId = '';
   beforeAll(() => { setUp(); });
-  afterAll(() => { tearDown(); });
 
-  test('予定が作成でき、表示される', done => {
-    User.upsert({ userId: 0, username: 'testuser' }).then(() => {
-      request(app)
-        .post('/schedules')
-        .send({
-          scheduleName: 'テスト予定1',
-          memo: 'テストメモ1\r\nテストメモ2',
-          candidates: 'テスト候補1\r\nテスト候補2\r\nテスト候補3'
-        })
-        .expect('Location', /schedules/)
-        .expect(302)
-        .end((err, res) => {
-          const createdSchedulePath = res.headers.location;
-          request(app)
-            .get(createdSchedulePath)
-            .expect(/テスト予定1/)
-            .expect(/テストメモ1/)
-            .expect(/テストメモ2/)
-            .expect(/テスト候補1/)
-            .expect(/テスト候補2/)
-            .expect(/テスト候補3/)
-            .expect(200)
-            .end((err, res) => { deleteScheduleAggregate(createdSchedulePath.split('/schedules/')[1], done, err);});
-        });
-    });
+  afterAll(async () => {
+    tearDown();
+    await deleteScheduleAggregate(scheduleId);
+  });
+
+  test('予定が作成でき、表示される', async () => {
+    await User.upsert({ userId: 0, username: 'testuser' });
+    const res = await request(app)
+      .post('/schedules')
+      .send({
+        scheduleName: 'テスト予定1',
+        memo: 'テストメモ1\r\nテストメモ2',
+        candidates: 'テスト候補1\r\nテスト候補2\r\nテスト候補3'
+      })
+      .expect('Location', /schedules/)
+      .expect(302)
+
+    const createdSchedulePath = res.headers.location;
+    scheduleId = createdSchedulePath.split('/schedules/')[1];
+    await request(app)
+      .get(createdSchedulePath)
+      .expect(/テスト予定1/)
+      .expect(/テストメモ1/)
+      .expect(/テストメモ2/)
+      .expect(/テスト候補1/)
+      .expect(/テスト候補2/)
+      .expect(/テスト候補3/)
+      .expect(200)
   });
 });
 
 describe('/schedules/:scheduleId/users/:userId/candidates/:candidateId', () => {
-  beforeAll(() => { setUp(); });
-  afterAll(() => { tearDown(); });
+  let scheduleId = '';
 
-  test('出欠が更新できる', (done) => {
-    User.upsert({ userId: 0, username: 'testuser' }).then(() => {
-      request(app)
-        .post('/schedules')
-        .send({ scheduleName: 'テスト出欠更新予定1', memo: 'テスト出欠更新メモ1', candidates: 'テスト出欠更新候補1' })
-        .end((err, res) => {
-          const createdSchedulePath = res.headers.location;
-          const [_, scheduleId] = createdSchedulePath.split('/schedules/');
-          Candidate.findOne({
-            where: { scheduleId: scheduleId }
-          }).then((candidate) => {
-            // 更新がされることをテスト
-            const userId = 0;
-            request(app)
-              .post(`/schedules/${scheduleId}/users/${userId}/candidates/${candidate.candidateId}`)
-              .send({ availability: 2 }) // 出席に更新
-              .expect('{"status":"OK","availability":2}')
-              .end((err, res) => {
-                Availability.findAll({
-                  where: { scheduleId: scheduleId }
-                }).then((availabilities) => {
-                  assert.strictEqual(availabilities.length, 1);
-                  assert.strictEqual(availabilities[0].availability, 2);
-                  deleteScheduleAggregate(scheduleId, done, err);
-                });
-              });
-          });
-        });
+  beforeAll(() => { setUp(); });
+  afterAll(async () => {
+    tearDown();
+    await deleteScheduleAggregate(scheduleId);
+  });
+
+  test('出欠が更新できる', async () => {
+    await User.upsert({ userId: 0, username: 'testuser' });
+    const res = await request(app)
+      .post('/schedules')
+      .send({ scheduleName: 'テスト出欠更新予定1', memo: 'テスト出欠更新メモ1', candidates: 'テスト出欠更新候補1' })
+    const createdSchedulePath = res.headers.location;
+    scheduleId = createdSchedulePath.split('/schedules/')[1];
+    const candidate = await Candidate.findOne({
+      where: { scheduleId: scheduleId }
     });
+    // 更新がされることをテスト
+    const userId = 0;
+    await request(app)
+      .post(`/schedules/${scheduleId}/users/${userId}/candidates/${candidate.candidateId}`)
+      .send({ availability: 2 }) // 出席に更新
+      .expect('{"status":"OK","availability":2}')
+
+    const availabilities = await Availability.findAll({
+      where: { scheduleId: scheduleId }
+    });
+    expect(availabilities.length).toBe(1);
+    expect(availabilities[0].availability).toBe(2);
   });
 });
 
-function deleteScheduleAggregate(scheduleId, done, err) {
-  Availability.findAll({
+async function deleteScheduleAggregate(scheduleId) {
+  const availabilities = await Availability.findAll({
     where: { scheduleId: scheduleId }
-  }).then((availabilities) => {
-    const promises = availabilities.map((a) => { return a.destroy(); });
-    Promise.all(promises).then(() => {
-      Candidate.findAll({
-        where: { scheduleId: scheduleId }
-      }).then((candidates) => {
-        const promises = candidates.map((c) => { return c.destroy(); });
-        Promise.all(promises).then(() => {
-          Schedule.findByPk(scheduleId).then((s) => {
-            s.destroy().then(() => {
-              if (err) return done(err);
-              done();
-            });
-          });
-        });
-      });
-    });
   });
+  const promisesAvailabilityDestroy = availabilities.map((a) => { return a.destroy(); });
+  await Promise.all(promisesAvailabilityDestroy);
+  const candidates = await Candidate.findAll({
+    where: { scheduleId: scheduleId }
+  });
+  const promisesCandidateDestroy = candidates.map((c) => { return c.destroy(); });
+  await Promise.all(promisesCandidateDestroy);
+  const s = await Schedule.findByPk(scheduleId);
+  await s.destroy();
 }
